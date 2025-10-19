@@ -1,2 +1,3 @@
 -- one simple read-only query
-SELECT abalance FROM pgbench_accounts WHERE aid = random_between(1, 1000000);
+\set aid (1 + random() * 1000000)::int
+SELECT abalance FROM pgbench_accounts WHERE aid = :aid;
