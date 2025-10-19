@@ -1,0 +1,24 @@
+{
+  "citus_coordinator": {
+    "BlockIO": "1.6GB / 8.04GB",
+    "CPUPerc": "0.04%",
+    "Container": "151f20f51c47f056b2b804e10def7dd3475a3376feac2850cc728fe75f15d783",
+    "ID": "151f20f51c47",
+    "MemPerc": "2.01%",
+    "MemUsage": "77.27MiB / 3.751GiB",
+    "Name": "citus_coordinator",
+    "NetIO": "1.53GB / 3.83GB",
+    "PIDs": "7"
+  },
+  "citus_worker1": {
+    "BlockIO": "1.85GB / 23.6GB",
+    "CPUPerc": "8.82%",
+    "Container": "c13ca81f42aee0683cf6eab2c83f990fcde0613ac8d5ce78d7075ec8586c1c66",
+    "ID": "c13ca81f42ae",
+    "MemPerc": "26.69%",
+    "MemUsage": "1.001GiB / 3.751GiB",
+    "Name": "citus_worker1",
+    "NetIO": "3.01GB / 1.36GB",
+    "PIDs": "11"
+  }
+}

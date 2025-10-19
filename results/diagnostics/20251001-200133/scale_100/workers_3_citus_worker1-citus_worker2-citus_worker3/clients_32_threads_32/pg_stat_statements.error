@@ -1,0 +1,4 @@
+Failed to collect pg_stat_statements: ERROR:  column "mean_time" does not exist
+LINE 1: SELECT queryid, calls, mean_time, rows, shared_blks_hit, sha...
+                               ^
+exit status 1

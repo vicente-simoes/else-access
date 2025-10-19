@@ -1,0 +1,63 @@
+#version: '3'
+
+services:
+  citus_coordinator:
+    image: citusdata/citus:12.1
+    container_name: citus_coordinator
+    ports:
+      - "5432:5432"
+    command: ["postgres", "-c", "shared_preload_libraries=citus,pg_stat_statements"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    depends_on:
+      - citus_worker1
+      - citus_worker2
+      - citus_worker3
+
+  citus_worker1:
+    image: citusdata/citus:12.1
+    container_name: citus_worker1
+    command: ["postgres", "-c", "shared_preload_libraries=citus,pg_stat_statements"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+
+  citus_worker2:
+    image: citusdata/citus:12.1
+    container_name: citus_worker2
+    command: ["postgres", "-c", "shared_preload_libraries=citus,pg_stat_statements"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+
+  #  NEW WORKER
+  citus_worker3:
+    image: citusdata/citus:12.1
+    container_name: citus_worker3
+    command: ["postgres", "-c", "shared_preload_libraries=citus,pg_stat_statements"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+
+  citus_bootstrap:
+    image: citusdata/citus:12.1
+    container_name: citus_bootstrap
+    depends_on:
+      - citus_coordinator
+      - citus_worker1
+      - citus_worker2
+      - citus_worker3
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      POSTGRES_HOST: ${POSTGRES_HOST:-citus_coordinator}
+      CITUS_WORKERS: '${CITUS_WORKERS:-citus_worker1 citus_worker2 citus_worker3}'
+      CITUS_WORKER_PORT: ${CITUS_WORKER_PORT:-5432}
+      PGBENCH_SCALE: ${PGBENCH_SCALE:-10}
+    volumes:
+      - ./scripts/init_citus.sh:/usr/local/bin/init_citus.sh:ro
+    entrypoint: ["/bin/bash", "/usr/local/bin/init_citus.sh"]
+    restart: "no"

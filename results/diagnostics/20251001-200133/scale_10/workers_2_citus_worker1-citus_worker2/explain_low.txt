@@ -1,0 +1,24 @@
+SET
+BEGIN
+                                                                                    QUERY PLAN                                                                                     
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (Citus Adaptive)  (cost=0.00..0.00 rows=0 width=0) (actual time=16.233..16.234 rows=1 loops=1)
+   Task Count: 1
+   Tuple data received from nodes: 4 bytes
+   Tasks Shown: All
+   ->  Task
+         Tuple data received from node: 4 bytes
+         Node: host=citus_worker2 port=5432 dbname=postgres
+         ->  Index Scan using pgbench_accounts_pkey_102141 on pgbench_accounts_102141 pgbench_accounts  (cost=0.29..8.30 rows=1 width=4) (actual time=0.025..0.026 rows=1 loops=1)
+               Index Cond: (aid = 1)
+               Buffers: shared hit=3
+             Planning Time: 0.292 ms
+             Execution Time: 0.038 ms
+   Buffers: shared hit=71
+ Planning:
+   Buffers: shared hit=292
+ Planning Time: 2.158 ms
+ Execution Time: 16.252 ms
+(17 rows)
+
+ROLLBACK
