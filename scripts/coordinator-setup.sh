@@ -27,7 +27,6 @@ if ! command -v psql >/dev/null 2>&1; then
   sudo apt-get install -y "postgresql-${PG_VER}" "${CITUS_PKG}" postgresql-contrib
 else
   echo "PostgreSQL already installed."
-  # Ensure citus + contrib present
   sudo apt-get install -y "${CITUS_PKG}" postgresql-contrib || true
 fi
 
@@ -71,21 +70,25 @@ grep -qF "$ALLOW_LINE" "${HBA}" || echo "$ALLOW_LINE" | sudo tee -a "${HBA}" >/d
 sudo systemctl restart postgresql
 
 # ---- Create/alter role, DB, and extensions ----
-# Create role if missing
 if sudo -u postgres psql -Atqc "SELECT 1 FROM pg_roles WHERE rolname='${DB_USER}'" | grep -q 1; then
   sudo -u postgres psql -c "ALTER ROLE ${DB_USER} WITH LOGIN PASSWORD '${DB_PASS}' SUPERUSER;"
 else
   sudo -u postgres psql -c "CREATE ROLE ${DB_USER} WITH LOGIN PASSWORD '${DB_PASS}' SUPERUSER;"
 fi
 
-# Create DB if missing
 if ! sudo -u postgres psql -Atqc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1; then
   sudo -u postgres createdb -O "${DB_USER}" "${DB_NAME}"
 fi
 
-# Extensions (in target DB)
 sudo -u postgres psql -d "${DB_NAME}" -c "CREATE EXTENSION IF NOT EXISTS citus;"
 sudo -u postgres psql -d "${DB_NAME}" -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"
+
+# ---- Final setup: ensure bench DB and restart ----
+echo
+echo "=== Ensuring 'bench' DB and Citus extension, restarting service ==="
+sudo -u postgres createdb bench || true
+sudo -u postgres psql -d bench -c "CREATE EXTENSION IF NOT EXISTS citus;"
+sudo systemctl restart postgresql
 
 echo
 echo "=== Coordinator ready ==="
