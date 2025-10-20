@@ -71,7 +71,6 @@ fi
 
 # ---- pg_hba: allow coordinator ----
 ALLOW_LINE="host    all             all             ${COORD_IP}/32         ${AUTH_MODE}"
-# Avoid duplicates:
 grep -qF "$ALLOW_LINE" "${HBA}" || echo "$ALLOW_LINE" | sudo tee -a "${HBA}" >/dev/null
 
 # ---- Restart to apply ----
@@ -86,7 +85,6 @@ else
   if [[ "$AUTH_MODE" == "md5" ]]; then
     sudo -u postgres psql -c "CREATE ROLE ${DB_USER} WITH LOGIN PASSWORD '${DB_PASS}' SUPERUSER;"
   else
-    # password not needed when using trust, but create user anyway:
     sudo -u postgres psql -c "CREATE ROLE ${DB_USER} WITH LOGIN SUPERUSER;"
   fi
 fi
@@ -97,6 +95,12 @@ fi
 
 sudo -u postgres psql -d "${DB_NAME}" -c "CREATE EXTENSION IF NOT EXISTS citus;"
 sudo -u postgres psql -d "${DB_NAME}" -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"
+
+# ---- Final setup: ensure 'bench' DB and restart ----
+echo "=== Ensuring 'bench' DB and Citus extension, restarting service ==="
+sudo -u postgres createdb bench || true
+sudo -u postgres psql -d bench -c "CREATE EXTENSION IF NOT EXISTS citus;"
+sudo systemctl restart postgresql
 
 echo
 echo "=== Worker ready ==="
