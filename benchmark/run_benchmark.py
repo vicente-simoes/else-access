@@ -12,8 +12,6 @@ import subprocess
 import sys
 import time
 import uuid
-import threading
-import statistics
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List, Sequence
@@ -76,59 +74,6 @@ def stream_command(cmd: List[str]) -> str:
         raise CommandError(f"Command {' '.join(cmd)} failed with exit code {return_code}")
     return "".join(output_lines)
 
-def _ssh_cmd(host: str, ssh_binary: str, ssh_user: str | None, ssh_opts: str) -> List[str]:
-    # Build the ssh prefix list (supports spaces in --ssh-binary)
-    base = shlex.split(ssh_binary)
-    if ssh_user:
-        dest = f"{ssh_user}@{host}"
-    else:
-        dest = host
-    return base + shlex.split(ssh_opts) + [dest, "--"]
-
-def _read_remote(host: str, cmd: str, *, ssh_binary: str, ssh_user: str | None, ssh_opts: str) -> str:
-    full = _ssh_cmd(host, ssh_binary, ssh_user, ssh_opts) + [cmd]
-    result = subprocess.run(full, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if result.returncode != 0:
-        raise CommandError(f"SSH to {host!r} failed: {result.stderr.strip() or result.stdout.strip()}")
-    return result.stdout
-
-def _read_proc_stat_line(host: str, ssh_binary: str, ssh_user: str | None, ssh_opts: str) -> list[int]:
-    # Returns jiffy counters from the "cpu" summary line
-    out = _read_remote(host, "cat /proc/stat | head -n1", ssh_binary=ssh_binary, ssh_user=ssh_user, ssh_opts=ssh_opts)
-    # Format: cpu  user nice system idle iowait irq softirq steal guest guest_nice
-    parts = out.strip().split()
-    if not parts or parts[0] != "cpu":
-        raise CommandError(f"Unexpected /proc/stat format from {host}: {out!r}")
-    return [int(x) for x in parts[1:11]]  # first 10 counters is plenty
-
-def _cpu_percent_from_two_reads(prev: list[int], curr: list[int]) -> float:
-    # Compute CPU% = 100 * (1 - idle_delta/total_delta)
-    idle_prev = prev[3] + prev[4]  # idle + iowait
-    idle_curr = curr[3] + curr[4]
-    total_prev = sum(prev)
-    total_curr = sum(curr)
-    idle_delta = idle_curr - idle_prev
-    total_delta = total_curr - total_prev
-    if total_delta <= 0:
-        return 0.0
-    usage = 100.0 * (1.0 - (idle_delta / total_delta))
-    # Clamp for safety
-    return max(0.0, min(100.0, usage))
-
-def _mem_percent(host: str, ssh_binary: str, ssh_user: str | None, ssh_opts: str) -> float:
-    out = _read_remote(host, "cat /proc/meminfo", ssh_binary=ssh_binary, ssh_user=ssh_user, ssh_opts=ssh_opts)
-    total = avail = None
-    for line in out.splitlines():
-        if line.startswith("MemTotal:"):
-            total = float(line.split()[1])  # kB
-        elif line.startswith("MemAvailable:"):
-            avail = float(line.split()[1])  # kB
-        if total is not None and avail is not None:
-            break
-    if not total or not avail:
-        return float("nan")
-    used_pct = 100.0 * (1.0 - (avail / total))
-    return max(0.0, min(100.0, used_pct))
 
 def percentile(values: Sequence[float], fraction: float) -> float:
     """Compute the percentile defined by *fraction* (0.0–1.0) for *values*."""
@@ -551,48 +496,6 @@ def run_pgbench(
 
 
 
-# Existing imports above
-
-# Add this class near other helper definitions (before main())
-class HostSampler(threading.Thread):
-    def __init__(self, host: str, interval: float, ssh_binary: str, ssh_user: str | None, ssh_opts: str):
-        super().__init__(daemon=True)
-        self.host = host
-        self.interval = interval
-        self.ssh_binary = ssh_binary
-        self.ssh_user = ssh_user
-        self.ssh_opts = ssh_opts
-        self._stop_event = threading.Event()
-        self.cpu_samples: list[float] = []
-        self.mem_samples: list[float] = []
-
-    def run(self) -> None:
-        try:
-            prev = _read_proc_stat_line(self.host, self.ssh_binary, self.ssh_user, self.ssh_opts)
-        except Exception:
-            return
-        while not self._stop_event.wait(self.interval):
-            try:
-                curr = _read_proc_stat_line(self.host, self.ssh_binary, self.ssh_user, self.ssh_opts)
-                cpu_pct = _cpu_percent_from_two_reads(prev, curr)
-                self.cpu_samples.append(cpu_pct)
-                prev = curr
-                mem_pct = _mem_percent(self.host, self.ssh_binary, self.ssh_user, self.ssh_opts)
-                if not math.isnan(mem_pct):
-                    self.mem_samples.append(mem_pct)
-            except Exception:
-                continue
-
-    def stop(self) -> None:
-        self._stop_event.set()
-
-    def summary(self) -> tuple[float, float]:
-        cpu_avg = statistics.fmean(self.cpu_samples) if self.cpu_samples else float("nan")
-        mem_avg = statistics.fmean(self.mem_samples) if self.mem_samples else float("nan")
-        return cpu_avg, mem_avg
-
-    ###########
-
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run pgbench from the client VM against a remote Citus coordinator.")
     parser.add_argument(
@@ -675,26 +578,6 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--rw-mix",
         default="90/10",
         help="Read/write mix (90/10 or 50/50). Selects pgbench script to run."
-    )
-    parser.add_argument(
-        "--monitor",
-        action="store_true",
-        help="Sample CPU and memory on coordinator and workers during each run"
-    )
-    parser.add_argument(
-        "--ssh-user",
-        default=None,
-        help="SSH username for remote hosts (default: current user)"
-    )
-    parser.add_argument(
-        "--ssh-opts",
-        default="-o BatchMode=yes -o StrictHostKeyChecking=no",
-        help="Extra ssh options (default: disable host key prompts)"
-    )
-    parser.add_argument(
-        "--ssh-binary",
-        default="ssh",
-        help="SSH command to use (e.g., 'ssh' or 'gcloud compute ssh --ssh-flag=...')"
     )
     return parser
 
@@ -779,52 +662,14 @@ def main(argv: List[str] | None = None) -> None:
                 time.sleep(args.warmup)
 
             print(f"==> [{run_id}] Running pgbench c={concurrency} j={thread_count} T={args.duration} mix={rw_mix}")
-
-            # --- START monitoring (only if --monitor is set) ---
-            hosts_to_monitor = []
-            if getattr(args, "monitor", False):
-                hosts_to_monitor.append(args.host)
-                hosts_to_monitor.extend(worker_group)
-                samplers = [
-                    HostSampler(h, 1.0, args.ssh_binary, args.ssh_user, args.ssh_opts)
-                    for h in hosts_to_monitor
-                ]
-                for s in samplers:
-                    s.start()
-            else:
-                samplers = []
-
-            # --- Run pgbench benchmark ---
             reset_pg_stat_statements(**DB)
             tps, lat_mean, lat_p95, lat_p99 = run_pgbench(
                 clients=concurrency,
                 threads=thread_count,
                 duration=args.duration,
-                rw_mix=rw_mix,
+                rw_mix=rw_mix,    # OK if run_pgbench ignores this for now
                 **DB,
             )
-
-            # --- STOP monitoring and summarize ---
-            coord_cpu_avg = coord_mem_avg = worker_cpu_avg = worker_cpu_max = worker_mem_avg = worker_mem_max = float("nan")
-
-            if samplers:
-                for s in samplers:
-                    s.stop(); s.join(timeout=2.0)
-
-                if samplers:
-                    coord_cpu_avg, coord_mem_avg = samplers[0].summary()
-                    worker_cpu_avgs, worker_mem_avgs = [], []
-                    for s in samplers[1:]:
-                        c, m = s.summary()
-                        worker_cpu_avgs.append(c)
-                        worker_mem_avgs.append(m)
-                    if worker_cpu_avgs:
-                        worker_cpu_avg = statistics.fmean(worker_cpu_avgs)
-                        worker_cpu_max = max(worker_cpu_avgs)
-                    if worker_mem_avgs:
-                        worker_mem_avg = statistics.fmean(worker_mem_avgs)
-                        worker_mem_max = max(worker_mem_avgs)
-                        # --- END monitoring section ---
 
             # Diagnostics folder per run
             run_dir = diagnostics_root / run_id
@@ -862,12 +707,6 @@ def main(argv: List[str] | None = None) -> None:
                 "lat_mean_ms": f"{lat_mean:.6f}",
                 "lat_p95_ms": f"{lat_p95:.6f}",
                 "lat_p99_ms": f"{lat_p99:.6f}",
-                "coord_cpu_avg_pct": f"{coord_cpu_avg:.2f}",
-                "coord_mem_avg_pct": f"{coord_mem_avg:.2f}",
-                "workers_cpu_avg_pct": f"{worker_cpu_avg:.2f}",
-                "workers_cpu_max_pct": f"{worker_cpu_max:.2f}",
-                "workers_mem_avg_pct": f"{worker_mem_avg:.2f}",
-                "workers_mem_max_pct": f"{worker_mem_max:.2f}",
             })
 
     else:
@@ -915,21 +754,6 @@ def main(argv: List[str] | None = None) -> None:
                         time.sleep(args.warmup)
 
                     print(f"==> Running pgbench with {client_count} clients ({thread_count} threads) for {args.duration}s")
-                    # --- START monitoring (only if --monitor is set) ---
-                    hosts_to_monitor = []
-                    if getattr(args, "monitor", False):
-                        hosts_to_monitor.append(args.host)
-                        hosts_to_monitor.extend(worker_group)
-                        samplers = [
-                            HostSampler(h, 1.0, args.ssh_binary, args.ssh_user, args.ssh_opts)
-                            for h in hosts_to_monitor
-                        ]
-                        for s in samplers:
-                            s.start()
-                    else:
-                        samplers = []
-                    # --- END start monitoring section ---
-
                     reset_pg_stat_statements(**DB)
                     tps, lat_mean, lat_p95, lat_p99 = run_pgbench(
                         clients=client_count,
@@ -937,29 +761,6 @@ def main(argv: List[str] | None = None) -> None:
                         duration=args.duration,
                         **DB,
                     )
-
-                    # --- STOP monitoring and summarize ---
-                    coord_cpu_avg = coord_mem_avg = worker_cpu_avg = worker_cpu_max = worker_mem_avg = worker_mem_max = float("nan")
-
-                    if samplers:
-                        for s in samplers:
-                            s.stop()
-                            s.join(timeout=2.0)
-
-                        if samplers:
-                            coord_cpu_avg, coord_mem_avg = samplers[0].summary()
-                            worker_cpu_avgs, worker_mem_avgs = [], []
-                            for s in samplers[1:]:
-                                c, m = s.summary()
-                                worker_cpu_avgs.append(c)
-                                worker_mem_avgs.append(m)
-                            if worker_cpu_avgs:
-                                worker_cpu_avg = statistics.fmean(worker_cpu_avgs)
-                                worker_cpu_max = max(worker_cpu_avgs)
-                            if worker_mem_avgs:
-                                worker_mem_avg = statistics.fmean(worker_mem_avgs)
-                                worker_mem_max = max(worker_mem_avgs)
-                    # --- END monitoring section ---
 
                     run_dir = scenario_root / f"clients_{client_count}_threads_{thread_count}"
                     run_dir.mkdir(parents=True, exist_ok=True)
@@ -1000,12 +801,6 @@ def main(argv: List[str] | None = None) -> None:
                         "lat_mean_ms": f"{lat_mean:.6f}",
                         "lat_p95_ms": f"{lat_p95:.6f}",
                         "lat_p99_ms": f"{lat_p99:.6f}",
-                        "coord_cpu_avg_pct": f"{coord_cpu_avg:.2f}",
-                        "coord_mem_avg_pct": f"{coord_mem_avg:.2f}",
-                        "workers_cpu_avg_pct": f"{worker_cpu_avg:.2f}",
-                        "workers_cpu_max_pct": f"{worker_cpu_max:.2f}",
-                        "workers_mem_avg_pct": f"{worker_mem_avg:.2f}",
-                        "workers_mem_max_pct": f"{worker_mem_max:.2f}",
                     })
 
     # Columns: add any new fields you captured in design mode
@@ -1018,9 +813,6 @@ def main(argv: List[str] | None = None) -> None:
         "scale", "duration", "clients", "threads",
         "workers", "worker_group",
         "tps", "lat_mean_ms", "lat_p95_ms", "lat_p99_ms",
-        "coord_cpu_avg_pct", "coord_mem_avg_pct",
-        "workers_cpu_avg_pct", "workers_cpu_max_pct",
-        "workers_mem_avg_pct", "workers_mem_max_pct",
     ]
     with output_path.open("w", newline="") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction="ignore")
@@ -1028,6 +820,8 @@ def main(argv: List[str] | None = None) -> None:
         writer.writerows(results)
 
     print(f"==> Results written to {output_path}")
+
+
 
 
 if __name__ == "__main__":
