@@ -562,7 +562,7 @@ class HostSampler(threading.Thread):
         self.ssh_binary = ssh_binary
         self.ssh_user = ssh_user
         self.ssh_opts = ssh_opts
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
         self.cpu_samples: list[float] = []
         self.mem_samples: list[float] = []
 
@@ -571,7 +571,7 @@ class HostSampler(threading.Thread):
             prev = _read_proc_stat_line(self.host, self.ssh_binary, self.ssh_user, self.ssh_opts)
         except Exception:
             return
-        while not self._stop.wait(self.interval):
+        while not self._stop_event.wait(self.interval):
             try:
                 curr = _read_proc_stat_line(self.host, self.ssh_binary, self.ssh_user, self.ssh_opts)
                 cpu_pct = _cpu_percent_from_two_reads(prev, curr)
@@ -584,7 +584,7 @@ class HostSampler(threading.Thread):
                 continue
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_event.set()
 
     def summary(self) -> tuple[float, float]:
         cpu_avg = statistics.fmean(self.cpu_samples) if self.cpu_samples else float("nan")
