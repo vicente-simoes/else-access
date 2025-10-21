@@ -441,8 +441,8 @@ def run_pgbench(
     tps_re = re.compile(r"^\s*tps\s*=\s*([0-9]+(?:\.[0-9]+)?)")
     mean_re = re.compile(r"latency\s+average\s*=\s*([0-9]+(?:\.[0-9]+)?)")
     # Allow old/new percentile formats (95th / 95% / about 95%)
-    p95_re = re.compile(r"latency[^\n]*?(?:95)(?:th)?(?:\s*percentile|%)[^0-9]+([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
-    p99_re = re.compile(r"latency[^\n]*?(?:99)(?:th)?(?:\s*percentile|%)[^0-9]+([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
+    p95_re = re.compile(r"(?:95(?:th)?(?:\s*percentile|%)\s*=\s*|0\.95=)([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
+    p99_re = re.compile(r"(?:99(?:th)?(?:\s*percentile|%)\s*=\s*|0\.99=)([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
 
     for line in output.splitlines():
         if (m := tps_re.search(line)):
