@@ -372,10 +372,10 @@ def build_argument_parser() -> argparse.ArgumentParser:
     p.add_argument("--worker-port", type=int, default=5432, help="Worker Postgres port (default: 5432)")
     p.add_argument("--warmup", type=nonneg_int, default=10, help="Seconds to pause between runs (default: 10)")
     p.add_argument("--rw-mix", default="90/10", help="Read/write mix (90/10 or 50/50).")
-    # NEW: shards list for LOOP mode
+    # shards list for LOOP mode
     p.add_argument("--shards", type=int, nargs="+",
                    help="Shard counts to test in loop mode (e.g., --shards 16 32 64).")
-    # NEW: include git commit only if requested
+    # include git commit only if requested
     p.add_argument("--git_commit", action="store_true",
                    help="Include git commit column/value in results CSV.")
     return p
@@ -401,6 +401,7 @@ def run_and_record(*, DB, diagnostics_root: Path, results: List[dict[str, str]],
                    scale: int, worker_group: tuple[str, ...],
                    concurrency: int, duration: int, threads: int | None,
                    rw_mix: str, git_commit_value: str | None,
+                   include_threads_col: bool,
                    extra_cols: dict[str, str | int] | None = None,
                    explain_markers: dict[str, bool] | None = None) -> None:
     if explain_markers is None:
@@ -449,19 +450,18 @@ def run_and_record(*, DB, diagnostics_root: Path, results: List[dict[str, str]],
         "workers": len(worker_group),
         "worker_group": ",".join(worker_group),
         "concurrency": concurrency,
-        "threads": th,
         "rw_mix": rw_mix,
         "tps": f"{tps:.6f}",
         "lat_mean_ms": f"{lat_mean:.6f}",
         "lat_p95_ms": f"{lat_p95:.6f}",
         "lat_p99_ms": f"{lat_p99:.6f}",
     }
-    # Optional extras (design mode or shards in loop mode)
+    if include_threads_col:
+        row["threads"] = th
     if extra_cols:
         for k, v in extra_cols.items():
             if v is not None:
                 row[k] = str(v)
-    # Optional git commit
     if git_commit_value is not None:
         row["git_commit"] = git_commit_value
 
@@ -484,6 +484,8 @@ def main(argv: List[str] | None = None) -> None:
     diagnostics_root = Path("results") / "diagnostics" / timestamp.strftime("%Y%m%d-%H%M%S")
     diagnostics_root.mkdir(parents=True, exist_ok=True)
 
+    include_threads_col = args.threads is not None  # <-- only include threads column if flag used
+
     # Ensure pg_stat_statements
     ensure_pg_stat_statements(**DB)
 
@@ -505,7 +507,7 @@ def main(argv: List[str] | None = None) -> None:
             scale = int(row["scale"])
             concurrency = int(row["concurrency"])
             rw_mix = (row.get("rw_mix") or "90/10").strip()
-            threads = args.threads or concurrency
+            th = args.threads or concurrency
 
             prepare_dataset(DB=DB, worker_group=worker_group, scale=scale, worker_port=args.worker_port, shards=shards)
 
@@ -516,13 +518,13 @@ def main(argv: List[str] | None = None) -> None:
             run_and_record(
                 DB=DB, diagnostics_root=diagnostics_root, results=results,
                 scale=scale, worker_group=worker_group, concurrency=concurrency,
-                duration=args.duration, threads=threads, rw_mix=rw_mix,
-                git_commit_value=git_commit_value,
+                duration=args.duration, threads=th, rw_mix=rw_mix,
+                git_commit_value=git_commit_value, include_threads_col=include_threads_col,
                 extra_cols={"run_id": run_id, "shards": shards},
                 explain_markers={"capture_explain": True},
             )
 
-    # LOOP MODE (now supports --shards)
+    # LOOP MODE (supports --shards)
     else:
         concurrencies = parse_concurrency(args.concurrency)
         worker_groups = parse_worker_groups(args.worker_groups)
@@ -548,6 +550,7 @@ def main(argv: List[str] | None = None) -> None:
                             DB=DB, diagnostics_root=diagnostics_root, results=results,
                             scale=scale, worker_group=wg, concurrency=c, duration=args.duration,
                             threads=th, rw_mix=args.rw_mix, git_commit_value=git_commit_value,
+                            include_threads_col=include_threads_col,
                             extra_cols=({"shards": shards} if shards is not None else None),
                             explain_markers={"capture_explain": c in (low_c, high_c)},
                         )
@@ -555,13 +558,12 @@ def main(argv: List[str] | None = None) -> None:
     # Build CSV headers dynamically
     fieldnames = [
         "timestamp_utc",
-        # git_commit only if requested
         *(["git_commit"] if args.git_commit else []),
-        # design-only columns (present when available)
         "run_id", "shards",
-        # common columns
         "scale", "workers", "worker_group",
-        "concurrency", "threads", "rw_mix",
+        "concurrency",
+        *(["threads"] if include_threads_col else []),  # <-- only if --threads was passed
+        "rw_mix",
         "tps", "lat_mean_ms", "lat_p95_ms", "lat_p99_ms",
     ]
     with out_path.open("w", newline="") as csvfile:
