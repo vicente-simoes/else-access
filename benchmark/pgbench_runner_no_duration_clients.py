@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import argparse
@@ -11,7 +10,8 @@ import shlex
 import subprocess
 import sys
 import time
-import uuid
+# CHANGE: removed unused uuid import (we no longer create log prefixes for -l logs)
+# import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List, Sequence
@@ -169,9 +169,7 @@ def select_query_for_explain(rows: Sequence[dict[str, str]]) -> str | None:
     return None
 
 
-def capture_explain_plan(
-        *, host: str, port: int, database: str, user: str, query: str, destination: Path
-) -> None:
+def capture_explain_plan(*, host: str, port: int, database: str, user: str, query: str, destination: Path) -> None:
     sql = "\n".join([
         "SET client_min_messages TO WARNING;",
         "BEGIN;",
@@ -393,8 +391,8 @@ def run_pgbench(
 ) -> tuple[float, float, float, float]:
     """Execute pgbench once against a remote coordinator and return TPS plus latency metrics."""
 
-    # Unique local log prefix for pgbench (-l --log-prefix <prefix>)
-    log_prefix = f"/tmp/pgbench_log_{uuid.uuid4().hex}_"
+    # CHANGE: removed per-transaction log prefix creation (we're not using -l)
+    # log_prefix = f"/tmp/pgbench_log_{uuid.uuid4().hex}_"
 
     # Choose script path based on mix
     if rw_mix.strip() in ("90/10", "read", "readonly"):
@@ -413,8 +411,9 @@ def run_pgbench(
         "-T", str(duration),
         "-P", "10",
         "-r",
-        "-l",
-        "--log-prefix", log_prefix,
+        # CHANGE: drop -l and --log-prefix so no per-transaction logs are produced
+        # "-l",
+        # "--log-prefix", log_prefix,
         "-f", workload_file,
         database,
     ]
@@ -422,37 +421,14 @@ def run_pgbench(
     # Run and capture stdout/stderr text
     output = stream_command(cmd)
 
-    # Collect latency samples from local pgbench logs (microseconds → ms)
-    latencies_ms: list[float] = []
-    try:
-        import glob, os
-        for path in glob.glob(f"{log_prefix}*"):
-            try:
-                with open(path, "r", encoding="utf-8", errors="ignore") as fh:
-                    for line in fh:
-                        line = line.strip()
-                        if not line or line.startswith("#"):
-                            continue
-                        # Heuristic: last numeric token is latency (µs) in pgbench log format
-                        parts = line.split()
-                        lat_us = None
-                        for tok in reversed(parts):
-                            try:
-                                lat_us = float(tok)
-                                break
-                            except ValueError:
-                                continue
-                        if lat_us is not None:
-                            latencies_ms.append(lat_us / 1000.0)
-            finally:
-                # Clean up each log file
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
-    except Exception:
-        # If log parsing fails, we’ll fall back to pgbench summary parsing below
-        pass
+    # CHANGE: removed parsing of per-transaction log files (latencies_ms); we rely exclusively on pgbench summary
+    # latencies_ms: list[float] = []
+    # try:
+    #     import glob, os
+    #     for path in glob.glob(f"{log_prefix}*"):
+    #         ...
+    # except Exception:
+    #     pass
 
     # Parse pgbench summary from stdout
     tps: float | None = None
@@ -479,15 +455,10 @@ def run_pgbench(
     if tps is None:
         raise CommandError("Failed to locate required pgbench metrics (tps) in output")
 
-    # Prefer high-resolution per-transaction latencies from logs if available
-    if latencies_ms:
-        lat_mean = sum(latencies_ms) / len(latencies_ms)
-        lat_p95 = percentile(latencies_ms, 0.95)
-        lat_p99 = percentile(latencies_ms, 0.99)
-    else:
-        lat_mean = lat_mean_output
-        lat_p95 = lat_p95_output if lat_p95_output is not None else float("nan")
-        lat_p99 = lat_p99_output if lat_p99_output is not None else float("nan")
+    # CHANGE: always use summary-derived metrics; do not prefer per-transaction samples
+    lat_mean = lat_mean_output
+    lat_p95 = lat_p95_output if lat_p95_output is not None else float("nan")
+    lat_p99 = lat_p99_output if lat_p99_output is not None else float("nan")
 
     if lat_mean is None:
         raise CommandError("Failed to locate required pgbench metrics (latency mean)")
@@ -692,7 +663,8 @@ def main(argv: List[str] | None = None) -> None:
             query = select_query_for_explain(stats_rows) or DEFAULT_EXPLAIN_QUERY
             capture_explain_plan(query=query, destination=run_dir / "explain.txt", **DB)
 
-            results.append({                "timestamp_utc": timestamp.isoformat(),
+            results.append({
+                "timestamp_utc": timestamp.isoformat(),
                 "git_commit": git_commit,
                 "run_id": run_id,
                 "scale": scale,
@@ -787,9 +759,11 @@ def main(argv: List[str] | None = None) -> None:
                         capture_explain_plan(query=query, destination=scenario_root / "explain_high.txt", **DB)
                         explain_high_captured.add(scenario_key)
 
-                    results.append({                        "timestamp_utc": timestamp.isoformat(),
+                    results.append({
+                        "timestamp_utc": timestamp.isoformat(),
                         "git_commit": git_commit,
-                        "scale": scale,                        "threads": thread_count,
+                        "scale": scale,
+                        "threads": thread_count,
                         "workers": len(worker_group),
                         "worker_group": ",".join(worker_group),
                         "tps": f"{tps:.6f}",
