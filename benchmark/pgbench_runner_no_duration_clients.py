@@ -10,8 +10,9 @@ import shlex
 import subprocess
 import sys
 import time
-# CHANGE: removed unused uuid import (we no longer create log prefixes for -l logs)
-# import uuid
+import uuid
+import glob
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List, Sequence
@@ -30,7 +31,7 @@ class CommandError(RuntimeError):
 
 
 def run_command(cmd: List[str], *, check: bool = True, input_text: str | None = None) -> subprocess.CompletedProcess:
-   
+
 
     result = subprocess.run(
         cmd,
