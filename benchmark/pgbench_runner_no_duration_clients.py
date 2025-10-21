@@ -10,8 +10,8 @@ import shlex
 import subprocess
 import sys
 import time
-# CHANGE (Option 2): we now create log prefixes for -l logs, so we need uuid
-import uuid
+# CHANGE: removed unused uuid import (we no longer create log prefixes for -l logs)
+# import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List, Sequence
@@ -46,7 +46,7 @@ def run_command(cmd: List[str], *, check: bool = True, input_text: str | None = 
 
     result = subprocess.run(
         cmd,
-        input=input_text,   # <-- text=True handles encoding
+        input=input_text,   # <-- remove .encode()
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -169,7 +169,9 @@ def select_query_for_explain(rows: Sequence[dict[str, str]]) -> str | None:
     return None
 
 
-def capture_explain_plan(*, host: str, port: int, database: str, user: str, query: str, destination: Path) -> None:
+def capture_explain_plan(
+        *, host: str, port: int, database: str, user: str, query: str, destination: Path
+) -> None:
     sql = "\n".join([
         "SET client_min_messages TO WARNING;",
         "BEGIN;",
@@ -391,8 +393,8 @@ def run_pgbench(
 ) -> tuple[float, float, float, float]:
     """Execute pgbench once against a remote coordinator and return TPS plus latency metrics."""
 
-    # CHANGE (Option 2): create a unique prefix for pgbench -l logs
-    log_prefix = f"/tmp/pgbench_log_{uuid.uuid4().hex}_"
+    # CHANGE: removed per-transaction log prefix creation (we're not using -l)
+    # log_prefix = f"/tmp/pgbench_log_{uuid.uuid4().hex}_"
 
     # Choose script path based on mix
     if rw_mix.strip() in ("90/10", "read", "readonly"):
@@ -411,9 +413,9 @@ def run_pgbench(
         "-T", str(duration),
         "-P", "10",
         "-r",
-        # CHANGE (Option 2): re-enable per-transaction logging
-        "-l",
-        "--log-prefix", log_prefix,
+        # CHANGE: drop -l and --log-prefix so no per-transaction logs are produced
+        # "-l",
+        # "--log-prefix", log_prefix,
         "-f", workload_file,
         database,
     ]
@@ -421,41 +423,14 @@ def run_pgbench(
     # Run and capture stdout/stderr text
     output = stream_command(cmd)
 
-    # CHANGE (Option 2): parse per-transaction logs (µs → ms) with a format-aware approach
-    latencies_ms: list[float] = []
-    try:
-        import glob, os
-        for path in glob.glob(f"{log_prefix}*"):
-            try:
-                with open(path, "r", encoding="utf-8", errors="ignore") as fh:
-                    for line in fh:
-                        parts = line.strip().split()
-                        if not parts:
-                            continue
-                        lat_us = None
-                        # Many pgbench builds use: client_id txn_no start_time_us latency_us [lag_us...]
-                        # Try safe positions first, then scan for a "sane" microsecond latency.
-                        if len(parts) >= 4 and parts[3].isdigit():
-                            lat_us = int(parts[3])
-                        if lat_us is None:
-                            for tok in parts:
-                                if tok.isdigit():
-                                    x = int(tok)
-                                    # Accept 1µs .. 60s as "sane" latency range
-                                    if 0 < x < 60_000_000:
-                                        lat_us = x
-                                        break
-                        if lat_us is not None:
-                            latencies_ms.append(lat_us / 1000.0)
-            finally:
-                # Best-effort cleanup
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
-    except Exception:
-        # Swallow any log parsing issues; we'll fall back to summary parsing
-        pass
+    # CHANGE: removed parsing of per-transaction log files (latencies_ms); we rely exclusively on pgbench summary
+    # latencies_ms: list[float] = []
+    # try:
+    #     import glob, os
+    #     for path in glob.glob(f"{log_prefix}*"):
+    #         ...
+    # except Exception:
+    #     pass
 
     # Parse pgbench summary from stdout
     tps: float | None = None
@@ -482,15 +457,10 @@ def run_pgbench(
     if tps is None:
         raise CommandError("Failed to locate required pgbench metrics (tps) in output")
 
-    # CHANGE (Option 2): prefer high-resolution per-transaction samples; fall back to summary values
-    if latencies_ms:
-        lat_mean = sum(latencies_ms) / len(latencies_ms)
-        lat_p95  = percentile(latencies_ms, 0.95)
-        lat_p99  = percentile(latencies_ms, 0.99)
-    else:
-        lat_mean = lat_mean_output
-        lat_p95  = lat_p95_output if lat_p95_output is not None else float("nan")
-        lat_p99  = lat_p99_output if lat_p99_output is not None else float("nan")
+    # CHANGE: always use summary-derived metrics; do not prefer per-transaction samples
+    lat_mean = lat_mean_output
+    lat_p95 = lat_p95_output if lat_p95_output is not None else float("nan")
+    lat_p99 = lat_p99_output if lat_p99_output is not None else float("nan")
 
     if lat_mean is None:
         raise CommandError("Failed to locate required pgbench metrics (latency mean)")
